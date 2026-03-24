@@ -1,205 +1,669 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>Shapefile Viewer – Auto‑load all ZIPs</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8" />
+  <title>Selection/Export – ooipsectiongrid only (Lasso + Shift)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
-<style>
-  html, body { margin:0; height:100%; font-family:sans-serif; }
-  #map { width:100%; height:100%; }
+  <style>
+    html, body { margin:0; height:100%; font-family:sans-serif; }
+    #map { width:100%; height:100%; }
 
-  #panel {
-    position:absolute;
-    top:10px; right:10px;
-    width:320px;
-    max-height:80vh;
-    overflow:auto;
-    background:#fff;
-    border-radius:6px;
-    box-shadow:0 2px 10px rgba(0,0,0,0.2);
-    padding:10px;
-    font-size:12px;
-  }
+    /* Sidebar */
+    #panel {
+      position:absolute;
+      top:10px; left:10px;
+      width:340px;
+      max-height:82vh;
+      overflow:auto;
+      background:#fff;
+      border-radius:8px;
+      box-shadow:0 2px 14px rgba(0,0,0,0.2);
+      padding:12px;
+      font-size:12px;
+      z-index:1000;
+    }
 
-  button {
-    width:100%; padding:8px; margin-bottom:6px;
-    cursor:pointer; border:none; border-radius:4px;
-    background:#3388ff; color:#fff;
-  }
+    .header {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      margin-bottom:10px;
+    }
 
-  button.secondary { background:#888; }
+    .title {
+      font-weight:700;
+      font-size:13px;
+    }
 
-  table { width:100%; border-collapse:collapse; font-size:11px; }
-  th, td { border:1px solid #ddd; padding:4px; text-align:left; }
-  th { background:#f4f4f4; }
-</style>
+    .badge {
+      font-size:11px;
+      padding:3px 8px;
+      border-radius:999px;
+      background:#eef2ff;
+      color:#334;
+      border:1px solid #d7ddff;
+      white-space:nowrap;
+    }
+
+    .btn {
+      width:100%;
+      padding:9px 10px;
+      margin-bottom:8px;
+      cursor:pointer;
+      border:none;
+      border-radius:6px;
+      background:#3388ff;
+      color:#fff;
+      font-weight:600;
+    }
+    .btn.secondary { background:#8a8a8a; }
+
+    .btn:disabled {
+      background:#b7c9f7;
+      cursor:not-allowed;
+    }
+
+    table { width:100%; border-collapse:collapse; font-size:11px; }
+    th, td { border:1px solid #ddd; padding:4px; text-align:left; vertical-align:top; }
+    th { background:#f4f4f4; }
+
+    #status {
+      font-size:11px;
+      color:#444;
+      margin-top:6px;
+      line-height:1.3;
+    }
+
+    .hint {
+      background:#f7f7f7;
+      border:1px solid #e5e5e5;
+      border-radius:6px;
+      padding:8px;
+      margin:8px 0 10px 0;
+      line-height:1.35;
+      color:#333;
+    }
+
+    .key {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      font-size: 11px;
+      background:#fff;
+      padding:2px 6px;
+      border-radius:6px;
+      border:1px solid #ddd;
+    }
+  </style>
 </head>
+
 <body>
+  <div id="map"></div>
 
-<div id="map"></div>
+  <!-- Sidebar UI -->
+  <div id="panel">
+    <div class="header">
+      <div class="title">Selection Export</div>
+      <div class="badge" id="countBadge">0 selected</div>
+    </div>
 
-<div id="panel">
-  <button id="downloadBtn">Download CSV</button>
-  <button id="clearBtn" class="secondary">Clear Selection</button>
-  <div id="tableContainer">No selection</div>
-</div>
+    <div class="hint">
+      <div><span class="key">Lasso</span>: drag on the map</div>
+      <div><span class="key">Shift</span> + click/lasso: add/toggle</div>
+      <div><b>Only</b> <span class="key">ooipsectiongrid</span> is selectable</div>
+    </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
+    <button id="exportBtn" class="btn" disabled>Export CSV</button>
+    <button id="clearBtn" class="btn secondary">Clear Selection</button>
 
-<script>
-/* -------------------------------------------------
-   CONFIGURATION – list every zipped shapefile you want
-   ------------------------------------------------- */
-const shapefileUrls = [
-  "data/ooipsectiongrid.zip",
-  "data/Bakken Units.zip",
-  "data/Handsworth Units.zip",
-];
+    <div id="status">No selection</div>
+    <div id="tableContainer" style="margin-top:10px;">No selection</div>
+  </div>
 
-/* -------------------------------------------------
-   MAP INITIALISATION
-   ------------------------------------------------- */
-const map = L.map('map').setView([51.05, -114.07], 10);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; OpenStreetMap contributors'
-}).addTo(map);
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
-/* -------------------------------------------------
-   STATE & HELPERS
-   ------------------------------------------------- */
-let selected = new Map(); // id → feature
+  <script>
+    /* -------------------------------------------------
+       CONFIGURATION – list every zipped shapefile you want
+       Only ooipsectiongrid is selectable.
+       ------------------------------------------------- */
+    const shapefileUrls = [
+      "data/ooipsectiongrid.zip",
+      "data/Bakken Units.zip",
+      "data/Handsworth Units.zip",
+    ];
 
-const getId = f => f.id ?? JSON.stringify(f.properties);
+    const selectableUrl = "data/ooipsectiongrid.zip";
 
-const styles = {
-  default: { color: "#3388ff", weight: 1, fillOpacity: 0.2 },
-  hover:   { weight: 2, fillOpacity: 0.4 },
-  selected:{ color: "blue", weight: 2, fillOpacity: 0.6 }
-};
+    /* -------------------------------------------------
+       MAP INITIALISATION
+       ------------------------------------------------- */
+    const map = L.map('map').setView([51.05, -114.07], 10);
 
-/* ---- Persistence ---- */
-function save() {
-  localStorage.setItem("selectedFeatures", JSON.stringify([...selected.values()]));
-}
-function load() {
-  const data = localStorage.getItem("selectedFeatures");
-  if (!data) return;
-  JSON.parse(data).forEach(f => selected.set(getId(f), f));
-}
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
 
-/* ---- UI ---- */
-function updateTable() {
-  const container = document.getElementById("tableContainer");
-  if (selected.size === 0) {
-    container.innerHTML = "No selection";
-    return;
-  }
-  const features = [...selected.values()];
-  const keys = Object.keys(features[0].properties);
+    // Ensure selectable layer renders "on top"
+    map.createPane('selectPane');
+    map.getPane('selectPane').style.zIndex = 650;
 
-  let html = "<table><thead><tr>";
-  html += keys.map(k => `<th>${k}</th>`).join("");
-  html += "</tr></thead><tbody>";
+    /* -------------------------------------------------
+       STATE & HELPERS
+       ------------------------------------------------- */
+    // id → { feature, layer }
+    let selected = new Map();
 
-  html += features.map(f => `
-    <tr>
-      ${keys.map(k => `<td>${f.properties[k] ?? ""}</td>`).join("")}
-    </tr>
-  `).join("");
+    // For lasso performance: store turf features only for ooipsectiongrid
+    // id → { layer, feature, turfFeature }
+    let gridIndex = new Map();
 
-  html += "</tbody></table>";
-  container.innerHTML = html;
-}
+    const styles = {
+      default:   { color: "#3388ff", weight: 1, fillOpacity: 0.20 },
+      hover:     { color: "#1d6fe6", weight: 2, fillOpacity: 0.45 },
+      selected:  { color: "#0b3d91", weight: 2, fillOpacity: 0.65 }
+    };
 
-/* ---- CSV export ---- */
-function downloadCSV() {
-  if (selected.size === 0) return alert("No polygons selected.");
-  const features = [...selected.values()];
-  const keys = Object.keys(features[0].properties);
-  const rows = [
-    keys.join(","),
-    ...features.map(f =>
-      keys.map(k => `"${(f.properties[k] ?? "").toString().replace(/"/g,'""')}"`).join(",")
-    )
-  ];
-  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "selected_polygons.csv";
-  a.click();
-  URL.revokeObjectURL(url);
-}
+    const getId = (feature) => {
+      if (feature?.id != null) return String(feature.id);
+      const p = feature?.properties || {};
+      // Prefer common stable keys if present
+      const candidates = ["id", "ID", "OBJECTID", "FID", "Fid", "grid_id", "section_id", "name"];
+      for (const k of candidates) if (p[k] != null) return String(p[k]);
+      return JSON.stringify(p);
+    };
 
-/* -------------------------------------------------
-   LOAD ALL SHAPEFILES
-   ------------------------------------------------- */
-function loadShapefile(url) {
-  return shp(url).then(geojson => {
-    return L.geoJSON(geojson, {
-      style: styles.default,
-      onEachFeature: (feature, layer) => {
-        const id = getId(feature);
+    const truncate = (s, n = 160) => {
+      s = (s == null) ? "" : String(s);
+      return s.length > n ? s.slice(0, n) + "…" : s;
+    };
 
-        // Restore previous selection if any
-        if (selected.has(id)) {
-          layer.setStyle(styles.selected);
-          layer.isSelected = true;
+    function makeTooltipContent(props) {
+      const p = props || {};
+      const entries = Object.entries(p);
+      // Show a compact list of attributes
+      const max = 8;
+      const items = entries.slice(0, max).map(([k, v]) => `
+        <div><b>${k}</b>: ${truncate(v, 120)}</div>
+      `).join("");
+      const more = entries.length > max ? `<div><i>+ ${entries.length - max} more…</i></div>` : "";
+      return `<div>${items}${more}</div>`;
+    }
+
+    /* ---- Persistence ---- */
+    function saveSelection() {
+      // Store minimal: only properties+geometry serialized from selected features
+      // (selected Map values are GeoJSON-like features)
+      const payload = [...selected.values()].map(x => x.feature);
+      localStorage.setItem("selectedFeatures", JSON.stringify(payload));
+    }
+
+    function loadSelection() {
+      const data = localStorage.getItem("selectedFeatures");
+      if (!data) return;
+
+      try {
+        const list = JSON.parse(data);
+        for (const f of list) {
+          const id = getId(f);
+          selected.set(id, { feature: f, layer: null }); // layer filled after load
         }
+      } catch (e) {
+        console.warn("Failed to parse saved selection:", e);
+      }
+    }
 
-        layer.on({
-          mouseover() {
-            if (!layer.isSelected) layer.setStyle(styles.hover);
-          },
-          mouseout() {
-            if (!layer.isSelected) layer.setStyle(styles.default);
-          },
-          click() {
-            layer.isSelected = !layer.isSelected;
-            if (layer.isSelected) {
-              selected.set(id, feature);
-              layer.setStyle(styles.selected);
-            } else {
-              selected.delete(id);
-              layer.setStyle(styles.default);
+    /* ---- UI ---- */
+    function updateUI() {
+      const count = selected.size;
+      document.getElementById("countBadge").textContent = `${count} selected`;
+
+      const exportBtn = document.getElementById("exportBtn");
+      exportBtn.disabled = count === 0;
+
+      const status = document.getElementById("status");
+      if (count === 0) {
+        status.textContent = "No selection";
+        document.getElementById("tableContainer").textContent = "No selection";
+        return;
+      }
+      status.textContent = `Selected ${count} polygon${count === 1 ? "" : "s"} from ooipsectiongrid.`;
+
+      const features = [...selected.values()]
+        .map(x => x.feature)
+        .filter(Boolean);
+
+      if (!features.length) {
+        document.getElementById("tableContainer").textContent = "No selection";
+        return;
+      }
+
+      const keys = Object.keys(features[0].properties || {});
+      let html = "<table><thead><tr>";
+      html += keys.map(k => `<th>${k}</th>`).join("");
+      html += "</tr></thead><tbody>";
+
+      html += features.map(f => {
+        const props = f.properties || {};
+        return `<tr>${keys.map(k => `<td>${props[k] ?? ""}</td>`).join("")}</tr>`;
+      }).join("");
+
+      html += "</tbody></table>";
+      document.getElementById("tableContainer").innerHTML = html;
+    }
+
+    /* ---- CSV export ---- */
+    function downloadCSV() {
+      if (selected.size === 0) return;
+
+      const features = [...selected.values()].map(x => x.feature);
+      const keys = Object.keys(features[0].properties || {});
+      if (keys.length === 0) return alert("Selected features have no properties to export.");
+
+      // Simple CSV escaping
+      const escapeCell = (v) => {
+        const s = (v == null) ? "" : String(v);
+        return `"${s.replace(/"/g, '""')}"`;
+      };
+
+      const rows = [
+        keys.join(","),
+        ...features.map(f => keys.map(k => escapeCell(f.properties?.[k])).join(","))
+      ];
+
+      const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "ooipsectiongrid_selected_polygons.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    /* -------------------------------------------------
+       SELECTION RULES
+       - Only ooipsectiongrid is selectable.
+       - Other shapefiles are display-only.
+       - Shift key adds/toggles; no-shift replaces selection.
+       ------------------------------------------------- */
+    function applySelectionStyle(layer, isSelected) {
+      if (!layer) return;
+      if (isSelected) layer.setStyle(styles.selected);
+      else layer.setStyle(styles.default);
+    }
+
+    function addToSelection(id, feature, layer) {
+      selected.set(id, { feature, layer });
+      applySelectionStyle(layer, true);
+    }
+
+    function removeFromSelection(id) {
+      const item = selected.get(id);
+      if (item?.layer) applySelectionStyle(item.layer, false);
+      selected.delete(id);
+    }
+
+    function clearSelection() {
+      for (const id of selected.keys()) removeFromSelection(id);
+      selected.clear();
+      saveSelection();
+      updateUI();
+    }
+
+    function syncSavedSelectionStyles() {
+      // After layers load, re-attach saved selection to layers.
+      for (const [id, item] of selected.entries()) {
+        // layer is filled via gridIndex lookup below
+        const grid = gridIndex.get(id);
+        if (grid) {
+          item.layer = grid.layer;
+          applySelectionStyle(grid.layer, true);
+        } else {
+          // If the feature isn't present anymore, drop it.
+          selected.delete(id);
+        }
+      }
+    }
+
+    function selectionFromGridIds(ids, mode /* "replace"|"add" */) {
+      if (mode === "replace") {
+        // Replace current selection with these ids
+        // Remove any that are not in the new set
+        const next = new Set(ids);
+        for (const id of [...selected.keys()]) {
+          if (!next.has(id)) removeFromSelection(id);
+        }
+        // Add new ones
+        for (const id of next) {
+          if (!selected.has(id)) {
+            const entry = gridIndex.get(id);
+            if (entry) addToSelection(id, entry.feature, entry.layer);
+          }
+        }
+      } else {
+        // add/toggle mode
+        for (const id of ids) {
+          if (selected.has(id)) removeFromSelection(id);
+          else {
+            const entry = gridIndex.get(id);
+            if (entry) addToSelection(id, entry.feature, entry.layer);
+          }
+        }
+      }
+      saveSelection();
+      updateUI();
+    }
+
+    /* -------------------------------------------------
+       LOAD SHAPEFILES (auto-load all ZIPs)
+       - Add all layers to map
+       - Only ooipsectiongrid layers are interactive/selectable
+       - ooipsectiongrid is put in selectPane (on top)
+       ------------------------------------------------- */
+    loadSelection();
+
+    function loadShapefile(url) {
+      return shp(url).then((geojson) => {
+        const isGrid = url === selectableUrl;
+
+        return L.geoJSON(geojson, {
+          pane: isGrid ? "selectPane" : undefined,
+          style: styles.default,
+          onEachFeature: (feature, layer) => {
+            const id = getId(feature);
+
+            if (!isGrid) {
+              // Display-only layers: no selection, no click, no tooltip
+              layer.off();
+              layer.on({
+                mouseover() { /* keep default hover off for non-selectable */ },
+                mouseout() { /* keep default */ }
+              });
+              return;
             }
-            save();
-            updateTable();
+
+            // Selectable layer: hover tooltips + click selection
+            gridIndex.set(id, { layer, feature, turfFeature: null });
+
+            // Restore saved selection immediately (styles; layer is selectable)
+            if (selected.has(id)) applySelectionStyle(layer, true);
+
+            // Tooltips with attributes (uses data from properties)
+            // Also add "attributes" as HTML data-* if you want later
+            const props = feature?.properties || {};
+            const tt = makeTooltipContent(props);
+
+            layer.bindTooltip(tt, {
+              sticky: true,
+              direction: "auto",
+              opacity: 0.95
+            });
+
+            layer.on({
+              mouseover() {
+                if (!selected.has(id)) layer.setStyle(styles.hover);
+              },
+              mouseout() {
+                if (!selected.has(id)) layer.setStyle(styles.default);
+              },
+              click(e) {
+                // Prevent click during lasso
+                if (lassoState.active) return;
+
+                const mode = e.originalEvent.shiftKey ? "add" : "replace";
+
+                if (mode === "replace") {
+                  // Clicking should select only this feature when shift is NOT held
+                  selectionFromGridIds([id], "replace");
+                } else {
+                  // Shift click toggles this feature
+                  selectionFromGridIds([id], "add");
+                }
+              }
+            });
           }
         });
+      });
+    }
+
+    // Load all files, but ensure ooipsectiongrid is added after others for top rendering too.
+    // (We also use pane to be safe.)
+    const otherUrls = shapefileUrls.filter(u => u !== selectableUrl);
+    const gridUrls = shapefileUrls.filter(u => u === selectableUrl);
+
+    // Load others first
+    Promise.all(otherUrls.map(loadShapefile))
+      .then((otherLayers) => {
+        const fgOther = L.featureGroup(otherLayers);
+        fgOther.addTo(map);
+
+        // Load grid last (selectable on top)
+        return Promise.all(gridUrls.map(loadShapefile));
+      })
+      .then((gridLayers) => {
+        const gridLayer = L.featureGroup(gridLayers);
+        gridLayer.addTo(map);
+
+        // Ensure we fit bounds to all layers
+        const allBounds = gridLayer.getBounds();
+        // If there are other layers, include their bounds
+        // (featureGroup above for others isn't retained here, so we compute from layers that are on map)
+        map.eachLayer((layer) => {
+          if (layer?.getBounds) {
+            const b = layer.getBounds();
+            if (b && b.isValid && allBounds) allBounds.extend(b);
+            else if (b && b.isValid) {
+              // no-op
+            }
+          }
+        });
+        if (allBounds && allBounds.isValid) map.fitBounds(allBounds, { padding: [20, 20] });
+
+        // Precompute turf polygons only for gridIndex (for lasso intersection tests)
+        // turfFeature is cached by id.
+        for (const [id, entry] of gridIndex.entries()) {
+          try {
+            // feature is already GeoJSON-like from shpjs
+            gridIndex.set(id, { ...entry, turfFeature: turf.feature(entry.feature.geometry, entry.feature.properties) });
+          } catch (e) {
+            console.warn("Turf feature build failed for", id, e);
+          }
+        }
+
+        // Sync saved selection styles/layers
+        syncSavedSelectionStyles();
+        updateUI();
+      })
+      .catch((err) => {
+        console.error("Failed to load one or more shapefiles:", err);
+        alert("Error loading shapefiles – see console for details.");
+      });
+
+    /* -------------------------------------------------
+       LASSO SELECTION (freehand)
+       - Only selects ooipsectiongrid (gridIndex)
+       - Shift: add/toggle
+       - No shift: replace selection
+       ------------------------------------------------- */
+    const lassoState = {
+      active: false,
+      shiftKey: false,
+      points: [],
+      polyline: null,
+      finishHandlerBound: false
+    };
+
+    function latLngsToClosedCoords(latlngs) {
+      // turf expects [lng, lat] and polygon ring closure
+      const coords = latlngs.map(ll => [ll.lng, ll.lat]);
+      if (coords.length < 3) return null;
+      // close ring
+      const first = coords[0];
+      const last = coords[coords.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) coords.push(first);
+      return coords;
+    }
+
+    // Remove small jitter / reduce points
+    function simplifyLatLngs(latlngs, toleranceMeters = 6) {
+      // Simple approach: keep points that moved enough in screen/latlon.
+      // For robustness, tolerance in degrees isn't good; we approximate with Turf distance.
+      if (latlngs.length <= 2) return latlngs;
+
+      const kept = [latlngs[0]];
+      let last = latlngs[0];
+
+      for (let i = 1; i < latlngs.length; i++) {
+        const now = latlngs[i];
+        const from = turf.point([last.lng, last.lat]);
+        const to = turf.point([now.lng, now.lat]);
+        const d = turf.distance(from, to, { units: "meters" });
+        if (d >= toleranceMeters) {
+          kept.push(now);
+          last = now;
+        }
+      }
+      if (kept.length < 3) return latlngs;
+      return kept;
+    }
+
+    function startLasso(e) {
+      // Only left mouse button
+      if (e.originalEvent?.button !== 0) return;
+      if (e.originalEvent?.target && e.originalEvent.target.closest && e.originalEvent.target.closest("#panel")) return;
+
+      lassoState.active = true;
+      lassoState.shiftKey = !!e.originalEvent.shiftKey;
+      lassoState.points = [e.latlng];
+
+      map.dragging.disable();
+
+      if (lassoState.polyline) {
+        map.removeLayer(lassoState.polyline);
+        lassoState.polyline = null;
+      }
+
+      lassoState.polyline = L.polyline(lassoState.points, {
+        color: "#ff3b3b",
+        weight: 2,
+        opacity: 0.9,
+        dashArray: "6 6"
+      }).addTo(map);
+    }
+
+    function moveLasso(e) {
+      if (!lassoState.active) return;
+      lassoState.points.push(e.latlng);
+      if (lassoState.polyline) lassoState.polyline.setLatLngs(lassoState.points);
+    }
+
+    function finishLasso() {
+      if (!lassoState.active) return;
+      lassoState.active = false;
+
+      map.dragging.enable();
+
+      // Clean up the polyline
+      if (lassoState.polyline) {
+        map.removeLayer(lassoState.polyline);
+        lassoState.polyline = null;
+      }
+
+      const rawPoints = lassoState.points.slice();
+      lassoState.points = [];
+
+      // Need at least 3 points
+      if (rawPoints.length < 3) return;
+
+      const points = simplifyLatLngs(rawPoints, 5);
+      const ring = latLngsToClosedCoords(points);
+      if (!ring) return;
+
+      // Build lasso polygon feature
+      let lassoFeature;
+      try {
+        lassoFeature = turf.polygon([ring], { type: "lasso" });
+      } catch (e) {
+        console.warn("Invalid lasso polygon:", e);
+        return;
+      }
+
+      // Determine mode: shift => add/toggle, no shift => replace selection
+      const mode = lassoState.shiftKey ? "add" : "replace";
+
+      // Intersect lasso with ooipsectiongrid polygons only
+      const matchedIds = [];
+      for (const [id, entry] of gridIndex.entries()) {
+        const t = entry.turfFeature;
+        if (!t) continue;
+
+        // quick bbox check
+        const bb1 = turf.bbox(t);
+        const bb2 = turf.bbox(lassoFeature);
+        // (bbox intersection test)
+        const intersectsBbox =
+          !(bb1[0] > bb2[2] || bb1[2] < bb2[0] || bb1[1] > bb2[3] || bb1[3] < bb2[1]);
+        if (!intersectsBbox) continue;
+
+        // robust polygon intersection
+        try {
+          if (turf.booleanIntersects(t, lassoFeature) || turf.booleanContains(t, lassoFeature) || turf.booleanContains(lassoFeature, t)) {
+            matchedIds.push(id);
+          }
+        } catch (e) {
+          // If boolean ops fail, skip this polygon
+          console.warn("Intersection test failed for", id, e);
+        }
+      }
+
+      if (matchedIds.length === 0) {
+        // If no matches and mode is replace, clear selection to feel "foolproof"
+        // If you prefer "keep old selection when no matches", comment this out.
+        if (mode === "replace") clearSelection();
+        return;
+      }
+
+      selectionFromGridIds(matchedIds, mode);
+    }
+
+    // Lasso drag handlers
+    map.on('mousedown', startLasso);
+    map.on('mousemove', moveLasso);
+    map.on('mouseup', finishLasso);
+    map.on('mouseout', () => {
+      // If mouse leaves canvas while dragging, don't get stuck
+      if (lassoState.active) finishLasso();
+    });
+
+    /* -------------------------------------------------
+       UI EVENTS
+       ------------------------------------------------- */
+    document.getElementById("exportBtn").onclick = downloadCSV;
+    document.getElementById("clearBtn").onclick = () => {
+      clearSelection();
+      // optional: keep localStorage clean
+      localStorage.removeItem("selectedFeatures");
+      // styles already reset via clearSelection()
+    };
+
+    // Extra: keyboard convenience (Escape clears lasso/selection? Here: Escape clears selection)
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        if (lassoState.active) {
+          lassoState.active = false;
+          if (lassoState.polyline) map.removeLayer(lassoState.polyline);
+          lassoState.polyline = null;
+          map.dragging.enable();
+          lassoState.points = [];
+          return;
+        }
+        clearSelection();
       }
     });
-  });
-}
-
-// Load all files, collect their layers, then fit bounds to the union
-load(); // restore selection from localStorage
-Promise.all(shapefileUrls.map(loadShapefile))
-  .then(layers => {
-    const featureGroup = L.featureGroup(layers);
-    featureGroup.addTo(map);
-    map.fitBounds(featureGroup.getBounds(), { padding: [20, 20] });
-    updateTable();
-  })
-  .catch(err => {
-    console.error("Failed to load one or more shapefiles:", err);
-    alert("Error loading shapefiles – see console for details.");
-  });
-
-/* -------------------------------------------------
-   UI EVENTS
-   ------------------------------------------------- */
-document.getElementById("downloadBtn").onclick = downloadCSV;
-document.getElementById("clearBtn").onclick = () => {
-  selected.clear();
-  localStorage.removeItem("selectedFeatures");
-  location.reload(); // simple reset
-};
-</script>
-
+  </script>
 </body>
 </html>
