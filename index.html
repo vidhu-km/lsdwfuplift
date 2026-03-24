@@ -159,7 +159,7 @@
     // selected: id -> { feature, layer }
     let selected = new Map();
 
-    // gridIndex: id -> { layer, feature, turfFeature }
+    // gridIndex: id -> { layer, feature, turfFeature, baseStyle }
     let gridIndex = new Map();
 
     const styles = {
@@ -168,13 +168,28 @@
       selected:  { color: "#0b3d91", weight: 2, fillOpacity: 0.65 }
     };
 
-    const getId = (feature) => {
+    // Get per-URL base style (migrates from your example)
+    function getId(feature) {
       if (feature?.id != null) return String(feature.id);
       const p = feature?.properties || {};
       const candidates = ["id", "ID", "OBJECTID", "FID", "Fid", "grid_id", "section_id", "name"];
       for (const k of candidates) if (p[k] != null) return String(p[k]);
       return JSON.stringify(p);
-    };
+    }
+
+    // Place after styles are defined
+    function getStyle(url) {
+      if (url.includes("lines.zip")) {
+        return { color: "#000000", weight: 2 };
+      }
+      if (url.includes("ooipsectiongrid")) {
+        return styles.default;
+      }
+      if (url.includes("Bakken")) {
+        return { color: "green", weight: 1, fillOpacity: 0.2 };
+      }
+      return { color: "#999", weight: 1 };
+    }
 
     const truncate = (s, n = 160) => {
       s = (s == null) ? "" : String(s);
@@ -214,9 +229,10 @@
       }
     }
 
-    function applySelectionStyle(layer, isSelected) {
+    function applySelectionStyle(layer, isSelected, baseStyle) {
       if (!layer) return;
-      layer.setStyle(isSelected ? styles.selected : styles.default);
+      const merged = { ...(baseStyle || {}), ...(isSelected ? styles.selected : {}) };
+      layer.setStyle(merged);
     }
 
     function updateUI() {
@@ -327,7 +343,11 @@
     function clearSelection() {
       for (const id of [...selected.keys()]) {
         const item = selected.get(id);
-        if (item?.layer) applySelectionStyle(item.layer, false);
+        if (item?.layer) {
+          const grid = gridIndex.get(id);
+          const base = grid?.baseStyle;
+          applySelectionStyle(item.layer, false, base);
+        }
       }
       selected.clear();
       localStorage.removeItem("selectedFeatures");
@@ -338,8 +358,9 @@
       for (const [id, item] of selected.entries()) {
         const grid = gridIndex.get(id);
         if (grid) {
+          // Restore from saved: mark as selected
           item.layer = grid.layer;
-          applySelectionStyle(grid.layer, true);
+          applySelectionStyle(grid.layer, true, grid.baseStyle);
         } else {
           selected.delete(id);
         }
@@ -354,13 +375,13 @@
       if (selected.has(id)) {
         // unselect
         const item = selected.get(id);
-        if (item?.layer) applySelectionStyle(item.layer, false);
+        if (item?.layer) applySelectionStyle(item.layer, false, entry.baseStyle);
         selected.delete(id);
         return true;
       } else {
         // select
-        selected.set(id, { feature: entry.feature, layer: entry.layer });
-        applySelectionStyle(entry.layer, true);
+        selected.set(id, { feature: entry.feature, layer: entry.layer, baseStyle: entry.baseStyle });
+        applySelectionStyle(entry.layer, true, entry.baseStyle);
         return true;
       }
     }
@@ -384,12 +405,14 @@
     loadSelection();
 
     function loadShapefile(url) {
+      const baseStyle = getStyle(url);
+
       return shp(url).then((geojson) => {
         const isGrid = url === selectableUrl;
 
         return L.geoJSON(geojson, {
           pane: isGrid ? "selectPane" : undefined,
-          style: styles.default,
+          style: baseStyle,
           onEachFeature: (feature, layer) => {
             const id = getId(feature);
 
@@ -400,10 +423,10 @@
             }
 
             // Selectable ooipsectiongrid
-            gridIndex.set(id, { layer, feature, turfFeature: null });
+            gridIndex.set(id, { layer, feature, turfFeature: null, baseStyle });
 
             // Restore saved selection immediately (styles)
-            if (selected.has(id)) applySelectionStyle(layer, true);
+            if (selected.has(id)) applySelectionStyle(layer, true, baseStyle);
 
             // Tooltips with attributes
             layer.bindTooltip(makeTooltipContent(feature?.properties), {
@@ -414,10 +437,10 @@
 
             layer.on({
               mouseover() {
-                if (!selected.has(id)) layer.setStyle(styles.hover);
+                if (!selected.has(id)) layer.setStyle({ ...baseStyle, ...styles.hover });
               },
               mouseout() {
-                if (!selected.has(id)) layer.setStyle(styles.default);
+                if (!selected.has(id)) layer.setStyle(baseStyle);
               },
               click(e) {
                 // If a marker-draw is active, ignore click toggles to avoid conflicts
