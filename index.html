@@ -2,57 +2,39 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Shapefile Viewer</title>
+<title>Shapefile Viewer – Auto‑load all ZIPs</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-  html, body { margin: 0; height: 100%; font-family: sans-serif; }
-  #map { width: 100%; height: 100%; }
+  html, body { margin:0; height:100%; font-family:sans-serif; }
+  #map { width:100%; height:100%; }
 
   #panel {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    width: 320px;
-    max-height: 80vh;
-    overflow: auto;
-    background: #fff;
-    border-radius: 6px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-    padding: 10px;
-    font-size: 12px;
+    position:absolute;
+    top:10px; right:10px;
+    width:320px;
+    max-height:80vh;
+    overflow:auto;
+    background:#fff;
+    border-radius:6px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.2);
+    padding:10px;
+    font-size:12px;
   }
 
   button {
-    width: 100%;
-    padding: 8px;
-    margin-bottom: 6px;
-    cursor: pointer;
-    border: none;
-    border-radius: 4px;
-    background: #3388ff;
-    color: white;
+    width:100%; padding:8px; margin-bottom:6px;
+    cursor:pointer; border:none; border-radius:4px;
+    background:#3388ff; color:#fff;
   }
 
-  button.secondary {
-    background: #888;
-  }
+  button.secondary { background:#888; }
 
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 11px;
-  }
-
-  th, td {
-    border: 1px solid #ddd;
-    padding: 4px;
-    text-align: left;
-  }
-
-  th { background: #f4f4f4; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th, td { border:1px solid #ddd; padding:4px; text-align:left; }
+  th { background:#f4f4f4; }
 </style>
 </head>
 <body>
@@ -69,18 +51,29 @@
 <script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
 
 <script>
-const shpFile = "data/ooipsectiongrid.zip";
+/* -------------------------------------------------
+   CONFIGURATION – list every zipped shapefile you want
+   ------------------------------------------------- */
+const shapefileUrls = [
+  "data/ooipsectiongrid.zip",
+  "data/Bakken Units.zip",
+  "data/Handsworth Units.zip",
+];
 
+/* -------------------------------------------------
+   MAP INITIALISATION
+   ------------------------------------------------- */
 const map = L.map('map').setView([51.05, -114.07], 10);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-// --- State ---
-let selected = new Map(); // id -> feature
+/* -------------------------------------------------
+   STATE & HELPERS
+   ------------------------------------------------- */
+let selected = new Map(); // id → feature
 
-// --- Helpers ---
-const getId = f => f.id || JSON.stringify(f.properties);
+const getId = f => f.id ?? JSON.stringify(f.properties);
 
 const styles = {
   default: { color: "#3388ff", weight: 1, fillOpacity: 0.2 },
@@ -88,26 +81,23 @@ const styles = {
   selected:{ color: "blue", weight: 2, fillOpacity: 0.6 }
 };
 
-// --- Storage ---
+/* ---- Persistence ---- */
 function save() {
   localStorage.setItem("selectedFeatures", JSON.stringify([...selected.values()]));
 }
-
 function load() {
   const data = localStorage.getItem("selectedFeatures");
   if (!data) return;
   JSON.parse(data).forEach(f => selected.set(getId(f), f));
 }
 
-// --- UI ---
+/* ---- UI ---- */
 function updateTable() {
   const container = document.getElementById("tableContainer");
-
   if (selected.size === 0) {
     container.innerHTML = "No selection";
     return;
   }
-
   const features = [...selected.values()];
   const keys = Object.keys(features[0].properties);
 
@@ -122,84 +112,88 @@ function updateTable() {
   `).join("");
 
   html += "</tbody></table>";
-
   container.innerHTML = html;
 }
 
-// --- CSV ---
+/* ---- CSV export ---- */
 function downloadCSV() {
   if (selected.size === 0) return alert("No polygons selected.");
-
   const features = [...selected.values()];
   const keys = Object.keys(features[0].properties);
-
   const rows = [
     keys.join(","),
     ...features.map(f =>
       keys.map(k => `"${(f.properties[k] ?? "").toString().replace(/"/g,'""')}"`).join(",")
     )
   ];
-
   const blob = new Blob([rows.join("\n")], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
-
   const a = document.createElement("a");
   a.href = url;
   a.download = "selected_polygons.csv";
   a.click();
-
   URL.revokeObjectURL(url);
 }
 
-// --- Map Load ---
-load();
+/* -------------------------------------------------
+   LOAD ALL SHAPEFILES
+   ------------------------------------------------- */
+function loadShapefile(url) {
+  return shp(url).then(geojson => {
+    return L.geoJSON(geojson, {
+      style: styles.default,
+      onEachFeature: (feature, layer) => {
+        const id = getId(feature);
 
-shp(shpFile).then(geojson => {
-
-  const layer = L.geoJSON(geojson, {
-    style: styles.default,
-    onEachFeature: (feature, layer) => {
-
-      const id = getId(feature);
-
-      if (selected.has(id)) {
-        layer.setStyle(styles.selected);
-        layer.isSelected = true;
-      }
-
-      layer.on({
-        mouseover() {
-          if (!layer.isSelected) layer.setStyle(styles.hover);
-        },
-        mouseout() {
-          if (!layer.isSelected) layer.setStyle(styles.default);
-        },
-        click() {
-          layer.isSelected = !layer.isSelected;
-
-          if (layer.isSelected) {
-            selected.set(id, feature);
-            layer.setStyle(styles.selected);
-          } else {
-            selected.delete(id);
-            layer.setStyle(styles.default);
-          }
-
-          save();
-          updateTable();
+        // Restore previous selection if any
+        if (selected.has(id)) {
+          layer.setStyle(styles.selected);
+          layer.isSelected = true;
         }
-      });
-    }
-  }).addTo(map);
 
-  map.fitBounds(layer.getBounds());
-  updateTable();
+        layer.on({
+          mouseover() {
+            if (!layer.isSelected) layer.setStyle(styles.hover);
+          },
+          mouseout() {
+            if (!layer.isSelected) layer.setStyle(styles.default);
+          },
+          click() {
+            layer.isSelected = !layer.isSelected;
+            if (layer.isSelected) {
+              selected.set(id, feature);
+              layer.setStyle(styles.selected);
+            } else {
+              selected.delete(id);
+              layer.setStyle(styles.default);
+            }
+            save();
+            updateTable();
+          }
+        });
+      }
+    });
+  });
+}
 
-}).catch(console.error);
+// Load all files, collect their layers, then fit bounds to the union
+load(); // restore selection from localStorage
+Promise.all(shapefileUrls.map(loadShapefile))
+  .then(layers => {
+    const featureGroup = L.featureGroup(layers);
+    featureGroup.addTo(map);
+    map.fitBounds(featureGroup.getBounds(), { padding: [20, 20] });
+    updateTable();
+  })
+  .catch(err => {
+    console.error("Failed to load one or more shapefiles:", err);
+    alert("Error loading shapefiles – see console for details.");
+  });
 
-// --- Events ---
+/* -------------------------------------------------
+   UI EVENTS
+   ------------------------------------------------- */
 document.getElementById("downloadBtn").onclick = downloadCSV;
-
 document.getElementById("clearBtn").onclick = () => {
   selected.clear();
   localStorage.removeItem("selectedFeatures");
