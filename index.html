@@ -5,21 +5,45 @@
   <title>Shapefile Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Leaflet CSS -->
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100%; }
+
+    #panel {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 300px;
+      max-height: 400px;
+      overflow: auto;
+      background: white;
+      border: 1px solid #ccc;
+      z-index: 1000;
+      padding: 10px;
+      font-size: 12px;
     }
-    #map {
+
+    #downloadBtn {
+      margin-bottom: 10px;
       width: 100%;
-      height: 100%;
+      padding: 8px;
+      cursor: pointer;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 4px;
+    }
+
+    th {
+      background: #f0f0f0;
     }
   </style>
 </head>
@@ -27,31 +51,140 @@
 
 <div id="map"></div>
 
-<!-- Leaflet JS -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div id="panel">
+  <button id="downloadBtn">Download CSV</button>
+  <div id="tableContainer">No selection</div>
+</div>
 
-<!-- shp.js -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
 
 <script>
-  // Initialize map
-  const map = L.map('map').setView([51.05, -114.07], 10); // Calgary default
+const map = L.map('map').setView([51.05, -114.07], 10);
 
-  // Add base map
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+const shpFile = "data/ooipsectiongrid.zip";
+
+let selectedFeatures = [];
+
+// Load saved selections
+const saved = localStorage.getItem("selectedFeatures");
+if (saved) selectedFeatures = JSON.parse(saved);
+
+function defaultStyle() {
+  return { color: "#3388ff", weight: 1, fillOpacity: 0.2 };
+}
+
+function hoverStyle() {
+  return { weight: 2, fillOpacity: 0.4 };
+}
+
+function selectedStyle() {
+  return { color: "blue", weight: 2, fillOpacity: 0.6 };
+}
+
+function updateTable() {
+  const container = document.getElementById("tableContainer");
+
+  if (selectedFeatures.length === 0) {
+    container.innerHTML = "No selection";
+    return;
+  }
+
+  const keys = Object.keys(selectedFeatures[0].properties);
+
+  let html = "<table><tr>";
+  keys.forEach(k => html += `<th>${k}</th>`);
+  html += "</tr>";
+
+  selectedFeatures.forEach(f => {
+    html += "<tr>";
+    keys.forEach(k => html += `<td>${f.properties[k]}</td>`);
+    html += "</tr>";
+  });
+
+  html += "</table>";
+  container.innerHTML = html;
+}
+
+function saveSelection() {
+  localStorage.setItem("selectedFeatures", JSON.stringify(selectedFeatures));
+}
+
+shp(shpFile).then(function(geojson) {
+
+  const layer = L.geoJSON(geojson, {
+    style: defaultStyle,
+    onEachFeature: function (feature, layer) {
+
+      layer.isSelected = selectedFeatures.some(f =>
+        JSON.stringify(f.properties) === JSON.stringify(feature.properties)
+      );
+
+      if (layer.isSelected) layer.setStyle(selectedStyle());
+
+      layer.on({
+        mouseover: function () {
+          if (!layer.isSelected) layer.setStyle(hoverStyle());
+        },
+        mouseout: function () {
+          if (!layer.isSelected) layer.setStyle(defaultStyle());
+        },
+        click: function () {
+          layer.isSelected = !layer.isSelected;
+
+          if (layer.isSelected) {
+            layer.setStyle(selectedStyle());
+            selectedFeatures.push(feature);
+          } else {
+            layer.setStyle(defaultStyle());
+            selectedFeatures = selectedFeatures.filter(f =>
+              JSON.stringify(f.properties) !== JSON.stringify(feature.properties)
+            );
+          }
+
+          saveSelection();
+          updateTable();
+        }
+      });
+    }
   }).addTo(map);
 
-  // Path to your shapefile ZIP (must be in repo)
-  const shpFile = "data/ooipsectiongrid.zip";
+  map.fitBounds(layer.getBounds());
+  updateTable();
 
-  // Load and display shapefile
-  shp(shpFile).then(function(geojson) {
-    const layer = L.geoJSON(geojson).addTo(map);
-    map.fitBounds(layer.getBounds());
-  }).catch(function(err) {
-    console.error("Error loading shapefile:", err);
+}).catch(err => console.error(err));
+
+// CSV Download
+document.getElementById("downloadBtn").addEventListener("click", function () {
+
+  if (selectedFeatures.length === 0) {
+    alert("No polygons selected.");
+    return;
+  }
+
+  const keys = Object.keys(selectedFeatures[0].properties);
+
+  let csv = keys.join(",") + "\n";
+
+  selectedFeatures.forEach(f => {
+    const row = keys.map(k => `"${f.properties[k]}"`).join(",");
+    csv += row + "\n";
   });
+
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "selected_polygons.csv";
+  a.click();
+
+  URL.revokeObjectURL(url);
+});
 </script>
 
 </body>
