@@ -1,51 +1,59 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Shapefile Viewer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8" />
+<title>Shapefile Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
-  <style>
-    html, body { margin: 0; padding: 0; height: 100%; }
-    #map { width: 100%; height: 100%; }
+<style>
+  html, body { margin: 0; height: 100%; font-family: sans-serif; }
+  #map { width: 100%; height: 100%; }
 
-    #panel {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      width: 300px;
-      max-height: 400px;
-      overflow: auto;
-      background: white;
-      border: 1px solid #ccc;
-      z-index: 1000;
-      padding: 10px;
-      font-size: 12px;
-    }
+  #panel {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 320px;
+    max-height: 80vh;
+    overflow: auto;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    padding: 10px;
+    font-size: 12px;
+  }
 
-    #downloadBtn {
-      margin-bottom: 10px;
-      width: 100%;
-      padding: 8px;
-      cursor: pointer;
-    }
+  button {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    border: none;
+    border-radius: 4px;
+    background: #3388ff;
+    color: white;
+  }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
+  button.secondary {
+    background: #888;
+  }
 
-    th, td {
-      border: 1px solid #ddd;
-      padding: 4px;
-    }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
 
-    th {
-      background: #f0f0f0;
-    }
-  </style>
+  th, td {
+    border: 1px solid #ddd;
+    padding: 4px;
+    text-align: left;
+  }
+
+  th { background: #f4f4f4; }
+</style>
 </head>
 <body>
 
@@ -53,6 +61,7 @@
 
 <div id="panel">
   <button id="downloadBtn">Download CSV</button>
+  <button id="clearBtn" class="secondary">Clear Selection</button>
   <div id="tableContainer">No selection</div>
 </div>
 
@@ -60,93 +69,123 @@
 <script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
 
 <script>
-const map = L.map('map').setView([51.05, -114.07], 10);
+const shpFile = "data/ooipsectiongrid.zip";
 
+const map = L.map('map').setView([51.05, -114.07], 10);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-const shpFile = "data/ooipsectiongrid.zip";
+// --- State ---
+let selected = new Map(); // id -> feature
 
-let selectedFeatures = [];
+// --- Helpers ---
+const getId = f => f.id || JSON.stringify(f.properties);
 
-// Load saved selections
-const saved = localStorage.getItem("selectedFeatures");
-if (saved) selectedFeatures = JSON.parse(saved);
+const styles = {
+  default: { color: "#3388ff", weight: 1, fillOpacity: 0.2 },
+  hover:   { weight: 2, fillOpacity: 0.4 },
+  selected:{ color: "blue", weight: 2, fillOpacity: 0.6 }
+};
 
-function defaultStyle() {
-  return { color: "#3388ff", weight: 1, fillOpacity: 0.2 };
+// --- Storage ---
+function save() {
+  localStorage.setItem("selectedFeatures", JSON.stringify([...selected.values()]));
 }
 
-function hoverStyle() {
-  return { weight: 2, fillOpacity: 0.4 };
+function load() {
+  const data = localStorage.getItem("selectedFeatures");
+  if (!data) return;
+  JSON.parse(data).forEach(f => selected.set(getId(f), f));
 }
 
-function selectedStyle() {
-  return { color: "blue", weight: 2, fillOpacity: 0.6 };
-}
-
+// --- UI ---
 function updateTable() {
   const container = document.getElementById("tableContainer");
 
-  if (selectedFeatures.length === 0) {
+  if (selected.size === 0) {
     container.innerHTML = "No selection";
     return;
   }
 
-  const keys = Object.keys(selectedFeatures[0].properties);
+  const features = [...selected.values()];
+  const keys = Object.keys(features[0].properties);
 
-  let html = "<table><tr>";
-  keys.forEach(k => html += `<th>${k}</th>`);
-  html += "</tr>";
+  let html = "<table><thead><tr>";
+  html += keys.map(k => `<th>${k}</th>`).join("");
+  html += "</tr></thead><tbody>";
 
-  selectedFeatures.forEach(f => {
-    html += "<tr>";
-    keys.forEach(k => html += `<td>${f.properties[k]}</td>`);
-    html += "</tr>";
-  });
+  html += features.map(f => `
+    <tr>
+      ${keys.map(k => `<td>${f.properties[k] ?? ""}</td>`).join("")}
+    </tr>
+  `).join("");
 
-  html += "</table>";
+  html += "</tbody></table>";
+
   container.innerHTML = html;
 }
 
-function saveSelection() {
-  localStorage.setItem("selectedFeatures", JSON.stringify(selectedFeatures));
+// --- CSV ---
+function downloadCSV() {
+  if (selected.size === 0) return alert("No polygons selected.");
+
+  const features = [...selected.values()];
+  const keys = Object.keys(features[0].properties);
+
+  const rows = [
+    keys.join(","),
+    ...features.map(f =>
+      keys.map(k => `"${(f.properties[k] ?? "").toString().replace(/"/g,'""')}"`).join(",")
+    )
+  ];
+
+  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "selected_polygons.csv";
+  a.click();
+
+  URL.revokeObjectURL(url);
 }
 
-shp(shpFile).then(function(geojson) {
+// --- Map Load ---
+load();
+
+shp(shpFile).then(geojson => {
 
   const layer = L.geoJSON(geojson, {
-    style: defaultStyle,
-    onEachFeature: function (feature, layer) {
+    style: styles.default,
+    onEachFeature: (feature, layer) => {
 
-      layer.isSelected = selectedFeatures.some(f =>
-        JSON.stringify(f.properties) === JSON.stringify(feature.properties)
-      );
+      const id = getId(feature);
 
-      if (layer.isSelected) layer.setStyle(selectedStyle());
+      if (selected.has(id)) {
+        layer.setStyle(styles.selected);
+        layer.isSelected = true;
+      }
 
       layer.on({
-        mouseover: function () {
-          if (!layer.isSelected) layer.setStyle(hoverStyle());
+        mouseover() {
+          if (!layer.isSelected) layer.setStyle(styles.hover);
         },
-        mouseout: function () {
-          if (!layer.isSelected) layer.setStyle(defaultStyle());
+        mouseout() {
+          if (!layer.isSelected) layer.setStyle(styles.default);
         },
-        click: function () {
+        click() {
           layer.isSelected = !layer.isSelected;
 
           if (layer.isSelected) {
-            layer.setStyle(selectedStyle());
-            selectedFeatures.push(feature);
+            selected.set(id, feature);
+            layer.setStyle(styles.selected);
           } else {
-            layer.setStyle(defaultStyle());
-            selectedFeatures = selectedFeatures.filter(f =>
-              JSON.stringify(f.properties) !== JSON.stringify(feature.properties)
-            );
+            selected.delete(id);
+            layer.setStyle(styles.default);
           }
 
-          saveSelection();
+          save();
           updateTable();
         }
       });
@@ -156,35 +195,16 @@ shp(shpFile).then(function(geojson) {
   map.fitBounds(layer.getBounds());
   updateTable();
 
-}).catch(err => console.error(err));
+}).catch(console.error);
 
-// CSV Download
-document.getElementById("downloadBtn").addEventListener("click", function () {
+// --- Events ---
+document.getElementById("downloadBtn").onclick = downloadCSV;
 
-  if (selectedFeatures.length === 0) {
-    alert("No polygons selected.");
-    return;
-  }
-
-  const keys = Object.keys(selectedFeatures[0].properties);
-
-  let csv = keys.join(",") + "\n";
-
-  selectedFeatures.forEach(f => {
-    const row = keys.map(k => `"${f.properties[k]}"`).join(",");
-    csv += row + "\n";
-  });
-
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "selected_polygons.csv";
-  a.click();
-
-  URL.revokeObjectURL(url);
-});
+document.getElementById("clearBtn").onclick = () => {
+  selected.clear();
+  localStorage.removeItem("selectedFeatures");
+  location.reload(); // simple reset
+};
 </script>
 
 </body>
