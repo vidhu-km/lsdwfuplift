@@ -11,7 +11,6 @@
     html, body { margin:0; height:100%; font-family:sans-serif; }
     #map { width:100%; height:100%; }
 
-    /* Minimal, neutral panel styling */
     #panel {
       position:absolute;
       top:10px; left:10px;
@@ -32,7 +31,6 @@
       gap:10px;
       margin-bottom:10px;
     }
-
     .title { font-weight:700; font-size:13px; }
 
     .badge {
@@ -55,22 +53,13 @@
       font-weight:600;
     }
     .btn.secondary { background:#ddd; }
-
-    .btn:disabled {
-      background:#e0e0e0;
-      cursor:not-allowed;
-    }
+    .btn:disabled { background:#e0e0e0; cursor:not-allowed; }
 
     table { width:100%; border-collapse:collapse; font-size:11px; }
     th, td { border:1px solid #ddd; padding:4px; text-align:left; vertical-align:top; }
     th { background:#f4f4f4; }
 
-    #status {
-      font-size:11px;
-      color:#444;
-      margin-top:6px;
-      line-height:1.3;
-    }
+    #status { font-size:11px; color:#444; margin-top:6px; line-height:1.3; }
 
     .hint {
       background:#f7f7f7;
@@ -130,6 +119,9 @@
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
   <script>
+    // =========================
+    // Config / Globals
+    // =========================
     const shapefileUrls = [
       "data/ooipsectiongrid.zip",
       "data/Bakken Units.zip",
@@ -139,12 +131,9 @@
       "data/T1.zip",
       "data/T2.zip",
     ];
-
     const selectableUrl = "data/ooipsectiongrid.zip";
 
-    const map = L.map('map', {
-      boxZoom: false
-    }).setView([51.05, -114.07], 10);
+    const map = L.map('map', { boxZoom: false }).setView([51.05, -114.07], 10);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
@@ -152,40 +141,61 @@
     map.createPane('selectPane');
     map.getPane('selectPane').style.zIndex = 650;
 
-    // Opacity styling
     const GRID_UNSELECTED_STYLE = { fillOpacity: 0, opacity: 0, color: '#555', weight: 1 };
     const GRID_SELECTED_STYLE   = { fillOpacity: 0.4, opacity: 0.4, color: '#0000ff', weight: 1 };
 
-    let selected = new Map();
-    let gridIndex = new Map();
+    // id -> { feature, layer, baseStyle, isGrid, turfFeature }
+    const gridIndex = new Map();
+    // id -> { feature, layer, baseStyle, isGrid }
+    const selected = new Map();
 
-    // Base style by URL (for non-grid datasets)
+    const $countBadge = document.getElementById("countBadge");
+    const $exportBtn = document.getElementById("exportBtn");
+    const $clearBtn = document.getElementById("clearBtn");
+    const $status = document.getElementById("status");
+    const $tableContainer = document.getElementById("tableContainer");
+
+    // =========================
+    // Helpers
+    // =========================
+    function truncate(s, n = 160) {
+      s = (s == null) ? "" : String(s);
+      return s.length > n ? s.slice(0, n) + "…" : s;
+    }
+
+    function getId(feature) {
+      if (feature?.id != null) return String(feature.id);
+      const p = feature?.properties || {};
+      const candidates = ["id", "ID", "OBJECTID", "FID", "Fid", "grid_id", "section_id", "name"];
+      for (const k of candidates) if (p[k] != null) return String(p[k]);
+      return JSON.stringify(p);
+    }
+
     function getBaseStyleByUrl(url) {
       switch (url) {
         case "data/Bakken Units.zip":
-          return { weight: 3, color: '#555', fillOpacity: 0, opacity: 1 };
         case "data/Handsworth Units.zip":
           return { weight: 3, color: '#555', fillOpacity: 0, opacity: 1 };
+
         case "data/lines.zip":
           return { color: '#808080', weight: 2, opacity: 1, fillOpacity: 0 };
+
         case "data/sw.zip":
           return { color: '#1f6bd8', fillColor: '#1f6bd8', fillOpacity: 0.4, opacity: 1 };
+
         case "data/T1.zip":
           return { color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 0.4, opacity: 1 };
+
         case "data/T2.zip":
           return { color: '#e74c3c', fillColor: '#e74c3c', fillOpacity: 0.4, opacity: 1 };
+
         case selectableUrl:
-          // Grid: start unselected as invisible
           return GRID_UNSELECTED_STYLE;
+
         default:
           return { weight: 1, fillOpacity: 0.2, opacity: 1, color: '#333' };
       }
     }
-
-    const truncate = (s, n = 160) => {
-      s = (s == null) ? "" : String(s);
-      return s.length > n ? s.slice(0, n) + "…" : s;
-    };
 
     function makeTooltipContent(props) {
       const p = props || {};
@@ -196,12 +206,28 @@
         <div><b>${k}</b>: ${truncate(v, 120)}</div>
       `).join("");
 
-      const more = entries.length > max ? `<div><i>+ ${entries.length - max} more…</i></div>` : "";
+      const more = entries.length > max
+        ? `<div><i>+ ${entries.length - max} more…</i></div>`
+        : "";
+
       return `<div>${items}${more}</div>`;
     }
 
+    function applySelectionStyle(layer, isSelected, baseStyle, isGrid) {
+      if (!layer) return;
+      if (isSelected && isGrid) layer.setStyle(GRID_SELECTED_STYLE);
+      else layer.setStyle(baseStyle);
+    }
+
+    function getSelectedFeatures() {
+      return [...selected.values()].map(x => x.feature).filter(Boolean);
+    }
+
+    // =========================
+    // Persist selection
+    // =========================
     function saveSelection() {
-      const payload = [...selected.values()].map(x => x.feature);
+      const payload = getSelectedFeatures();
       localStorage.setItem("selectedFeatures", JSON.stringify(payload));
     }
 
@@ -213,76 +239,120 @@
         const list = JSON.parse(data);
         for (const f of list) {
           const id = getId(f);
-          selected.set(id, { feature: f, layer: null });
+          // layer will be linked once gridIndex is built
+          selected.set(id, { feature: f, layer: null, baseStyle: null, isGrid: true });
         }
       } catch (e) {
         console.warn("Failed to parse saved selection:", e);
       }
     }
 
-    function applySelectionStyle(layer, isSelected, baseStyle, isGrid = false) {
-      if (!layer) return;
-      if (isSelected && isGrid) {
-        layer.setStyle(GRID_SELECTED_STYLE);
-      } else {
-        layer.setStyle(baseStyle);
+    function syncSavedSelectionStyles() {
+      for (const [id] of selected.entries()) {
+        const grid = gridIndex.get(id);
+        if (!grid) { selected.delete(id); continue; }
+
+        const item = selected.get(id);
+        item.layer = grid.layer;
+        item.baseStyle = grid.baseStyle;
+        item.isGrid = grid.isGrid;
+
+        applySelectionStyle(grid.layer, true, grid.baseStyle, grid.isGrid);
       }
     }
 
+    // =========================
+    // Selection toggling
+    // =========================
+    function toggleId(id) {
+      const entry = gridIndex.get(id);
+      if (!entry) return false;
+
+      if (selected.has(id)) {
+        const item = selected.get(id);
+        applySelectionStyle(item.layer, false, entry.baseStyle, entry.isGrid);
+        selected.delete(id);
+        return true;
+      } else {
+        selected.set(id, { feature: entry.feature, layer: entry.layer, baseStyle: entry.baseStyle, isGrid: entry.isGrid });
+        applySelectionStyle(entry.layer, true, entry.baseStyle, entry.isGrid);
+        return true;
+      }
+    }
+
+    function toggleIds(ids) {
+      let changed = false;
+      const uniq = Array.from(new Set(ids));
+      for (const id of uniq) changed = toggleId(id) || changed;
+
+      if (changed) {
+        saveSelection();
+        updateUI();
+      }
+    }
+
+    function clearSelection() {
+      for (const [id, item] of selected.entries()) {
+        const grid = gridIndex.get(id);
+        if (grid?.layer) applySelectionStyle(grid.layer, false, grid.baseStyle, grid.isGrid);
+      }
+      selected.clear();
+      localStorage.removeItem("selectedFeatures");
+      updateUI();
+    }
+
+    // =========================
+    // UI
+    // =========================
     function updateUI() {
       const count = selected.size;
-      document.getElementById("countBadge").textContent = `${count} selected`;
 
-      document.getElementById("exportBtn").disabled = (count === 0);
+      $countBadge.textContent = `${count} selected`;
+      $exportBtn.disabled = (count === 0);
 
-      const status = document.getElementById("status");
       if (count === 0) {
-        status.textContent = "No selection";
-        document.getElementById("tableContainer").textContent = "No selection";
+        $status.textContent = "No selection";
+        $tableContainer.textContent = "No selection";
         return;
       }
 
-      status.textContent = `Selected ${count} polygon${count === 1 ? "" : "s"} from ooipsectiongrid.`;
+      $status.textContent = `Selected ${count} polygon${count === 1 ? "" : "s"} from ooipsectiongrid.`;
 
-      const features = [...selected.values()].map(x => x.feature).filter(Boolean);
+      const features = getSelectedFeatures();
       const props0 = features[0]?.properties || {};
       const keys = Object.keys(props0);
 
       if (!features.length || keys.length === 0) {
-        document.getElementById("tableContainer").textContent = "No selection";
+        $tableContainer.textContent = "No selection";
         return;
       }
 
-      let html = "<table><thead><tr>";
-      html += keys.map(k => `<th>${k} <button class="copyBtn" data-key="${k}" title="Copy column">${"Copy"}</button></th>`).join("");
-      html += "</tr></thead><tbody>";
+      const header = keys.map(k => `
+        <th>${k}
+          <button class="copyBtn" data-key="${k}" title="Copy column">Copy</button>
+        </th>
+      `).join("");
 
-      html += features.map(f => {
+      const rows = features.map(f => {
         const props = f.properties || {};
         return `<tr>${keys.map(k => `<td>${props[k] ?? ""}</td>`).join("")}</tr>`;
       }).join("");
 
-      html += "</tbody></table>";
-      document.getElementById("tableContainer").innerHTML = html;
+      $tableContainer.innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
     }
 
-    function copyColumnToClipboard(key) {
-      const items = [...selected.values()].map(x => x.feature);
+    async function copyColumnToClipboard(key) {
+      const features = getSelectedFeatures();
       const header = key;
-      const rows = items.map(f => (f.properties?.[key] ?? ""));
+      const rows = features.map(f => (f.properties?.[key] ?? ""));
       const csv = [header, ...rows].join("\n");
 
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(csv).catch((e) => {
-          fallbackCopy(csv);
-        });
-      } else {
-        fallbackCopy(csv);
-      }
-
-      function fallbackCopy(text) {
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(csv);
+        else throw new Error("Clipboard API unavailable");
+      } catch {
         const ta = document.createElement("textarea");
-        ta.value = text;
+        ta.value = csv;
         ta.style.position = "fixed";
         ta.style.left = "-9999px";
         document.body.appendChild(ta);
@@ -293,18 +363,10 @@
       }
     }
 
-    document.addEventListener('click', (e) => {
-      const t = e.target;
-      if (t && t.classList && t.classList.contains('copyBtn')) {
-        const key = t.getAttribute('data-key');
-        if (key) copyColumnToClipboard(key);
-      }
-    });
-
     function downloadCSV() {
       if (selected.size === 0) return;
 
-      const features = [...selected.values()].map(x => x.feature);
+      const features = getSelectedFeatures();
       const keys = Object.keys(features[0]?.properties || {});
       if (keys.length === 0) return alert("Selected features have no properties to export.");
 
@@ -313,78 +375,25 @@
         return `"${s.replace(/"/g, '""')}"`;
       };
 
-      const rows = [
+      const lines = [
         keys.join(","),
         ...features.map(f => keys.map(k => escapeCell(f.properties?.[k])).join(","))
       ];
 
-      const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
+      const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
+
       const a = document.createElement("a");
       a.href = url;
       a.download = "ooipsectiongrid_selected_polygons.csv";
       a.click();
+
       URL.revokeObjectURL(url);
     }
 
-    function clearSelection() {
-      for (const id of [...selected.keys()]) {
-        const item = selected.get(id);
-        if (item?.layer) {
-          const grid = gridIndex.get(id);
-          const base = grid?.baseStyle;
-          applySelectionStyle(item.layer, false, base, grid?.isGrid);
-        }
-      }
-      selected.clear();
-      localStorage.removeItem("selectedFeatures");
-      updateUI();
-    }
-
-    function syncSavedSelectionStyles() {
-      for (const [id, item] of selected.entries()) {
-        const grid = gridIndex.get(id);
-        if (grid) {
-          item.layer = grid.layer;
-          applySelectionStyle(grid.layer, true, grid.baseStyle, grid.isGrid);
-        } else {
-          selected.delete(id);
-        }
-      }
-    }
-
-    function toggleId(id) {
-      const entry = gridIndex.get(id);
-      if (!entry) return;
-
-      if (selected.has(id)) {
-        const item = selected.get(id);
-        if (item?.layer) applySelectionStyle(item.layer, false, entry.baseStyle, entry.isGrid);
-        selected.delete(id);
-        return true;
-      } else {
-        selected.set(id, { feature: entry.feature, layer: entry.layer, baseStyle: entry.baseStyle });
-        applySelectionStyle(entry.layer, true, entry.baseStyle, entry.isGrid);
-        return true;
-      }
-    }
-
-    function toggleIds(ids) {
-      const uniq = Array.from(new Set(ids));
-      let changed = false;
-
-      for (const id of uniq) {
-        if (toggleId(id)) changed = true;
-      }
-
-      if (changed) {
-        saveSelection();
-        updateUI();
-      }
-    }
-
-    loadSelection();
-
+    // =========================
+    // Shapefile loading
+    // =========================
     function loadShapefile(url) {
       const baseStyle = getBaseStyleByUrl(url);
 
@@ -394,21 +403,28 @@
         return L.geoJSON(geojson, {
           pane: isGrid ? "selectPane" : undefined,
           style: baseStyle,
+
           onEachFeature: (feature, layer) => {
             const id = getId(feature);
 
             if (!isGrid) {
               layer.off();
 
-              // Apply specific non-grid styling
+              // Special neutral styling for some non-grid datasets
               if (url === "data/Bakken Units.zip" || url === "data/Handsworth Units.zip") {
                 layer.setStyle({ weight: 3, fillOpacity: 0, color: '#555' });
               }
               return;
             }
 
-            // ooipsectiongrid: selectable
-            gridIndex.set(id, { layer, feature, turfFeature: null, baseStyle, isGrid: true });
+            // Grid: selectable
+            gridIndex.set(id, {
+              layer,
+              feature,
+              turfFeature: null, // created after load (once)
+              baseStyle,
+              isGrid: true
+            });
 
             if (selected.has(id)) applySelectionStyle(layer, true, baseStyle, true);
 
@@ -418,169 +434,133 @@
               opacity: 0.95
             });
 
-            layer.on({
-              click(e) {
-                // If in drawing/drag mode, clicks are ignored (handled by drag)
-                if (markerState.active) return;
-                toggleIds([id]);
-              }
+            layer.on("click", () => {
+              // single click toggle; ignore if currently drawing
+              if (drawState.active) return;
+              toggleIds([id]);
             });
           }
         });
       });
     }
 
-    // Drag drawing state
-    const markerState = {
+    // =========================
+    // Shift-drag selection
+    // =========================
+    const drawState = {
       active: false,
       points: [],
       polyline: null,
       toggledThisDrag: new Set()
     };
 
-    // Start drawing only if Shift is held (to differentiate from pan)
-    function startMarkerDraw(e) {
-      if (!e.originalEvent?.shiftKey) {
-        // Not in draw mode: allow pan
-        return;
-      }
+    function startDraw(e) {
+      if (!e.originalEvent?.shiftKey) return;
+      if (e.originalEvent?.button !== 0) return;
 
-      if (e.originalEvent?.button !== 0) return; // left-click only
-
-      // Don't start drawing when interacting with the panel
+      // don't start drawing when interacting with panel
       if (e.originalEvent?.target?.closest?.("#panel")) return;
 
-      markerState.active = true;
-      markerState.points = [e.latlng];
-      markerState.toggledThisDrag.clear();
+      drawState.active = true;
+      drawState.points = [e.latlng];
+      drawState.toggledThisDrag.clear();
 
-      // Do not disable map dragging; we rely on Shift to enter draw mode
-
-      if (markerState.polyline) {
-        map.removeLayer(markerState.polyline);
-        markerState.polyline = null;
+      if (drawState.polyline) {
+        map.removeLayer(drawState.polyline);
+        drawState.polyline = null;
       }
 
-      markerState.polyline = L.polyline(markerState.points, {
-        color: "", // neutral
-        weight: 2,
-        opacity: 0.9,
-        dashArray: "6 6"
+      drawState.polyline = L.polyline(drawState.points, {
+        color: "", weight: 2, opacity: 0.9, dashArray: "6 6"
       }).addTo(map);
     }
 
-    function moveMarkerDraw(e) {
-      if (!markerState.active) return;
-      const prev = markerState.points[markerState.points.length - 1];
-      const curr = e.latlng;
-      markerState.points.push(curr);
-      if (markerState.polyline) markerState.polyline.setLatLngs(markerState.points);
+    function moveDraw(e) {
+      if (!drawState.active) return;
 
-      if (prev) {
-        const segment = turf.lineString([[prev.lng, prev.lat], [curr.lng, curr.lat]]);
-        for (const [id, entry] of gridIndex.entries()) {
-          const t = entry.turfFeature;
-          if (!t) continue;
-          try {
-            const intersects = turf.booleanIntersects(t, segment) ||
-                               turf.booleanContains(t, segment) ||
-                               turf.booleanContains(segment, t);
-            if (intersects && !markerState.toggledThisDrag.has(id)) {
-              toggleId(id);
-              markerState.toggledThisDrag.add(id);
-            }
-          } catch {
-            // ignore
+      const prev = drawState.points[drawState.points.length - 1];
+      const curr = e.latlng;
+
+      drawState.points.push(curr);
+      if (drawState.polyline) drawState.polyline.setLatLngs(drawState.points);
+
+      if (!prev) return;
+
+      // segment as turf line (lng/lat)
+      const segment = turf.lineString(
+        [[prev.lng, prev.lat], [curr.lng, curr.lat]]
+      );
+
+      // Try to keep it reasonably fast: only intersect/contains checks
+      for (const [id, entry] of gridIndex.entries()) {
+        if (drawState.toggledThisDrag.has(id)) continue;
+
+        const t = entry.turfFeature;
+        if (!t) continue;
+
+        try {
+          const intersects =
+            turf.booleanIntersects(t, segment) ||
+            turf.booleanContains(t, segment) ||
+            turf.booleanContains(segment, t);
+
+          if (intersects) {
+            toggleId(id);
+            drawState.toggledThisDrag.add(id);
           }
+        } catch {
+          // ignore turf errors
         }
       }
     }
 
-    function finishMarkerDraw() {
-      if (!markerState.active) return;
-      markerState.active = false;
+    function finishDraw() {
+      if (!drawState.active) return;
+      drawState.active = false;
 
-      if (markerState.polyline) {
-        map.removeLayer(markerState.polyline);
-        markerState.polyline = null;
+      if (drawState.polyline) {
+        map.removeLayer(drawState.polyline);
+        drawState.polyline = null;
       }
 
-      markerState.points = [];
-      markerState.toggledThisDrag.clear();
+      drawState.points = [];
+      drawState.toggledThisDrag.clear();
+
+      // one UI update + save after drag ends (instead of many)
+      saveSelection();
+      updateUI();
     }
 
-    map.on('mousedown', startMarkerDraw);
-    map.on('mousemove', moveMarkerDraw);
-    map.on('mouseup', finishMarkerDraw);
-    map.on('mouseout', () => {
-      if (markerState.active) finishMarkerDraw();
-    });
+    map.on("mousedown", startDraw);
+    map.on("mousemove", moveDraw);
+    map.on("mouseup", finishDraw);
+    map.on("mouseout", finishDraw);
 
-    // UI events
-    document.getElementById("exportBtn").onclick = downloadCSV;
-    document.getElementById("clearBtn").onclick = clearSelection;
+    // =========================
+    // Events
+    // =========================
+    $exportBtn.onclick = downloadCSV;
+    $clearBtn.onclick = clearSelection;
+
+    document.addEventListener("click", (e) => {
+      const t = e.target;
+      if (t?.classList?.contains("copyBtn")) {
+        const key = t.getAttribute("data-key");
+        if (key) copyColumnToClipboard(key);
+      }
+    });
 
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        if (markerState.active) {
-          finishMarkerDraw();
-          return;
-        }
-        clearSelection();
-      }
+      if (e.key !== "Escape") return;
+      if (drawState.active) return finishDraw();
+      clearSelection();
     });
 
-    function getId(feature) {
-      if (feature?.id != null) return String(feature.id);
-      const p = feature?.properties || {};
-      const candidates = ["id", "ID", "OBJECTID", "FID", "Fid", "grid_id", "section_id", "name"];
-      for (const k of candidates) if (p[k] != null) return String(p[k]);
-      return JSON.stringify(p);
-    }
-
-    // Kick off loading
+    // =========================
+    // Main load
+    // =========================
     loadSelection();
-
-    function loadShapefile(url) {
-      const baseStyle = getBaseStyleByUrl(url);
-
-      return shp(url).then((geojson) => {
-        const isGrid = url === selectableUrl;
-
-        return L.geoJSON(geojson, {
-          pane: isGrid ? "selectPane" : undefined,
-          style: baseStyle,
-          onEachFeature: (feature, layer) => {
-            const id = getId(feature);
-
-            if (!isGrid) {
-              layer.off();
-              if (url === "data/Bakken Units.zip" || url === "data/Handsworth Units.zip") {
-                layer.setStyle({ weight: 3, fillOpacity: 0, color: '#555' });
-              }
-              return;
-            }
-
-            gridIndex.set(id, { layer, feature, turfFeature: null, baseStyle, isGrid: true });
-
-            if (selected.has(id)) applySelectionStyle(layer, true, baseStyle, true);
-
-            layer.bindTooltip(makeTooltipContent(feature?.properties), {
-              sticky: true,
-              direction: "auto",
-              opacity: 0.95
-            });
-
-            layer.on({
-              click(e) {
-                if (markerState.active) return;
-                toggleIds([id]);
-              }
-            });
-          }
-        });
-      });
-    }
+    updateUI(); // initial render (e.g. loaded selection will fill after grid loads)
 
     const otherUrls = shapefileUrls.filter(u => u !== selectableUrl);
     const gridUrls = shapefileUrls.filter(u => u === selectableUrl);
@@ -593,6 +573,7 @@
       .then((gridLayers) => {
         L.featureGroup(gridLayers).addTo(map);
 
+        // Fit bounds
         let bounds = null;
         map.eachLayer(layer => {
           if (typeof layer.getBounds === "function") {
@@ -602,14 +583,12 @@
         });
         if (bounds) map.fitBounds(bounds, { padding: [20, 20] });
 
+        // Build turf features once after everything is on the map
         for (const [id, entry] of gridIndex.entries()) {
           try {
-            gridIndex.set(id, {
-              ...entry,
-              turfFeature: turf.feature(entry.feature.geometry, entry.feature.properties)
-            });
-          } catch (e) {
-            console.warn("Turf feature build failed for", id, e);
+            entry.turfFeature = turf.feature(entry.feature.geometry, entry.feature.properties);
+          } catch (err) {
+            console.warn("Turf feature build failed for", id, err);
           }
         }
 
@@ -620,11 +599,6 @@
         console.error("Failed to load one or more shapefiles:", err);
         alert("Error loading shapefiles – see console for details.");
       });
-
-    function markerDragKeyHint() {
-      return "Hold Shift and drag to select (pan normally without Shift).";
-    }
-
   </script>
 </body>
 </html>
